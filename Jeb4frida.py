@@ -23,17 +23,17 @@ Helper JEB script to generate Frida hooks
 """
 class Jeb4frida(IScript):
     def run(self, ctx):
-        print(u"🔥 Jeb4frida...")
+        print(u"// ? Jeb4frida...")
         # Require script to be run in JEB GUI
         if not isinstance(ctx, IGraphicalClientContext):
-            print(u"❌ This script must be run within a graphical client.")
+            print(u"? This script must be run within a graphical client.")
             return
 
         view = ctx.getFocusedView()
         unit = view.getUnit()
 
         if isinstance(unit, IJavaSourceUnit) or isinstance(unit, IDexUnit):
-            print(u"IJavaSourceUnit / IDexUnit detected")
+            print(u"// IJavaSourceUnit / IDexUnit detected")
             # Both IJavaSourceUnit and IDexUnit have getDecompiler()
             dexdec = unit.getDecompiler()
             self.handle_java_dex(ctx, dexdec)
@@ -41,7 +41,7 @@ class Jeb4frida(IScript):
             
 
         if isinstance(unit, INativeSourceUnit) or isinstance(unit, INativeCodeUnit):
-            print(u"INativeSourceUnit / INativeCodeUnit detected...")
+            print(u"// INativeSourceUnit / INativeCodeUnit detected...")
             self.handle_native(ctx, unit)
             return
             
@@ -67,8 +67,8 @@ class Jeb4frida(IScript):
         else: # all methods                
             java_methods = java_class.getMethods()
         
-        print(u"🔥 Here\'s a fresh Frida hook...")
-        print('-' * 100)
+        print(u"// ? Here\'s a fresh Frida hook...")
+        print("// "+('-' * 100))
         print(self.gen_how_to(ctx))
         print(self.gen_java_hook(java_class, java_methods))
     
@@ -101,7 +101,7 @@ class Jeb4frida(IScript):
             method_name_var = u"{}_{}_{:x}".format(class_name_var, method_name, idx)
             method_name = '$init' if method_name == "init" else method_name
             if method_name == "clinit": 
-                print(u"//❌ Encountered <clinit>, skipping...\n//\tPS: Send PR if you know how to fix this.")
+                print(u"//? Encountered <clinit>, skipping...\n//\tPS: Send PR if you know how to fix this.")
                 continue
             method_parameters = java_method.getParameters()
             if len(method_parameters) > 0 and method_parameters[0].getIdentifier().toString() == "this":  # pop "this"
@@ -115,9 +115,11 @@ class Jeb4frida(IScript):
             frida_hook += u"""
     var {method_name_var} = {class_name_var}.{method_name}.overload({method_overload});
     {method_name_var}.implementation = function({method_arguments}) {{
-        console.log(`[+] Hooked {class_name}.{method_name}({method_arguments})`);
+        HOOK_LOG(`[+] on {class_name_var}::{method_name}({method_arguments}):\t`,{method_arguments});
         return {method_name_var}.call(this{hack}{method_arguments});
-    }};""".format(
+    }};
+    HOOK_LOG(`[+] java hooked {class_name}.{method_name}({method_arguments})`);
+    """.format(
                 class_name_var=class_name_var,
                 class_name=class_name,
                 method_name_var=method_name_var,
@@ -126,7 +128,7 @@ class Jeb4frida(IScript):
                 method_arguments=', '.join(method_arguments),
                 hack=', ' if len(method_arguments) > 0 else '')
 
-        return u"Java.perform(function() {{\n{}\n}});".format(frida_hook)
+        return u"const HOOK_LOG=console.log\nJava.perform(\nfunction() {{\n{}\n}});".format(frida_hook)
     
 
     def handle_native(self, ctx, unit):
@@ -154,20 +156,21 @@ class Jeb4frida(IScript):
         for idx, func_parameter_name in enumerate(func_parameter_names):
             func_args += u"this.{} = args[{}]; // {}\n                ".format(func_parameter_name, idx, func_parameter_types[idx].getName())
         if method_real_name.startswith("Java_"):
-            print("Java native method detected...")
+            print("// Java native method detected...")
             native_pointer = u"Module.getExportByName('{lib_name}', '{func_name}')".format(lib_name=lib_name, func_name=method_real_name)
-        elif method_real_name.startswith(u"→"):
-            print("Trampoline detected...")
-            native_pointer = u"Module.getExportByName('{lib_name}', '{func_name}')".format(lib_name=lib_name, func_name=method_real_name.lstrip(u"→"))
+        elif method_real_name.startswith(u"?"):
+            print("// Trampoline detected...")
+            native_pointer = u"Module.getExportByName('{lib_name}', '{func_name}')".format(lib_name=lib_name, func_name=method_real_name.lstrip(u"?"))
         elif re.match(r'sub_[A-F0-9]+', method_real_name):
-            print("Need to calculate offset...")
+            print("// Need to calculate offset...")
             native_pointer = u"Module.findBaseAddress('{lib_name}').add({func_offset})".format(lib_name=lib_name, func_offset=func_offset)
         else:
-            print("Everything else...")
+            print("// Everything else...")
             native_pointer = u"Module.getExportByName('{lib_name}', '{func_name}')".format(lib_name=lib_name, func_name=method_real_name)
 
 
         frida_hook = u"""
+const HOOK_LOG=console.log
 var interval = setInterval(function() {{
     if (Module.findBaseAddress("{lib_name}")) {{
         clearInterval(interval);
@@ -176,10 +179,11 @@ var interval = setInterval(function() {{
             onEnter(args) {{
                 {func_args}
             }}, onLeave(retval) {{ // return type: {func_retval_type}
-                console.log(`[+] Hooked {lib_name}[{func_name}]({func_params}) -> ${{retval}}`);
+                HOOK_LOG(`[+] on {lib_name}[{func_name}]({func_params}) -> ${{retval}}`);
                 // retval.replace(0x0)
             }}
         }});
+        HOOK_LOG(`[+] native hooked {lib_name}[{func_name}]({func_params}) -> ${{retval}}`);
 
         return;
     }}
@@ -187,8 +191,8 @@ var interval = setInterval(function() {{
         func_offset=func_offset, func_retval_type=func_retval_type, func_args=func_args,
         func_params=', '.join(func_parameter_names))
 
-        print(u"🔥 Here\'s a fresh Frida hook...")
-        print('-' * 100)
+        print(u"// ? Here\'s a fresh Frida hook...")
+        print("// "+('-' * 100))
         print(self.gen_how_to(ctx))
         print(frida_hook)
 
